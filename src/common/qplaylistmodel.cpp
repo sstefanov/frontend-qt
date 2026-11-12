@@ -27,8 +27,11 @@
 #include <QtDebug>
 #include <QFileInfo>
 #include <QDir>
+#include <QDirIterator>
+#include <QSet>
 #include <QRandomGenerator>
 #include <QMessageBox>
+#include <vector>
 
 #include "qplaylistmodel.hpp"
 #include <QMimeData>
@@ -44,6 +47,8 @@ QPlaylistModel::QPlaylistModel(projectm* _projectM, QObject * parent)
         qWarning() << "Failed to create playlist manager";
     } else {
         projectm_playlist_set_preset_switched_event_callback(m_playlist, &QPlaylistModel::presetSwitched, this);
+        // Replaces the playlist's own handler, so automatic changes also go to the prepared preset
+        projectm_set_preset_switch_requested_event_callback(m_projectM, &QPlaylistModel::switchRequested, this);
     }
 }
 
@@ -56,11 +61,49 @@ void QPlaylistModel::presetSwitched(bool isHardCut, unsigned int index, void * u
         model->m_activePresetUrl = QString(filename);
         projectm_playlist_free_string(filename);
     }
+    model->planNext();
+}
+
+void QPlaylistModel::switchRequested(bool isHardCut, void * userData)
+{
+    static_cast<QPlaylistModel *>(userData)->playNext(isHardCut);
+}
+
+void QPlaylistModel::planNext()
+{
+    const uint32_t size = projectm_playlist_size(m_playlist);
+    if (size == 0)
+        return;
+
+    const uint32_t current = projectm_playlist_get_position(m_playlist);
+    if (projectm_playlist_get_shuffle(m_playlist) && size > 1) {
+        // The library draws its random preset only when switching, too late to prepare it
+        do {
+            m_plannedNext = QRandomGenerator::global()->bounded(size);
+        } while (m_plannedNext == current);
+    } else {
+        m_plannedNext = (current + 1) % size;
+    }
+
+    char * filename = projectm_playlist_item(m_playlist, m_plannedNext);
+    if (filename) {
+        m_preloader.preload(filename);
+        projectm_playlist_free_string(filename);
+    }
+}
+
+void QPlaylistModel::playNext(bool hardCut)
+{
+    if (projectm_playlist_get_shuffle(m_playlist) && m_plannedNext < projectm_playlist_size(m_playlist))
+        projectm_playlist_set_position(m_playlist, m_plannedNext, hardCut);
+    else
+        projectm_playlist_play_next(m_playlist, hardCut);
 }
 
 QPlaylistModel::~QPlaylistModel()
 {
     if (m_playlist) {
+        projectm_set_preset_switch_requested_event_callback(m_projectM, nullptr, nullptr);
         projectm_playlist_destroy(m_playlist);
     }
 }
@@ -250,16 +293,21 @@ bool QPlaylistModel::loadDefaultPresets(const QString & systemPresetDir)
 
     beginResetModel();
     projectm_playlist_clear(m_playlist);
+    QStringList loaded;
     for (int i = 0; i < dirs.size(); ++i) {
         // A directory inside another one is already covered by the recursive scan
         bool nested = false;
         for (const QString & other : canonicalDirs)
             nested = nested || canonicalDirs[i].startsWith(other + '/');
         // The library's own duplicate check is quadratic: ~30 s for 140k presets
-        if (!nested)
+        if (!nested) {
             projectm_playlist_add_path(m_playlist, dirs[i].toLocal8Bit().data(), true, true);
+            loaded << dirs[i];
+        }
     }
     endResetModel();
+
+    setTexturePaths(loaded);
 
     uint32_t size = projectm_playlist_size(m_playlist);
     if (size > 0) {
@@ -267,6 +315,35 @@ bool QPlaylistModel::loadDefaultPresets(const QString & systemPresetDir)
     }
 
     return size > 0;
+}
+
+// Presets find their textures by name, so projectM needs every directory below the preset roots that holds images
+void QPlaylistModel::setTexturePaths(const QStringList & presetDirs)
+{
+    static const QStringList imageFilters{"*.jpg", "*.jpeg", "*.dds", "*.png", "*.tga", "*.bmp", "*.dib"};
+    QSet<QString> found;
+    for (const QString & dir : presetDirs) {
+        QDirIterator it(dir, imageFilters, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            found.insert(it.fileInfo().absolutePath());
+        }
+    }
+
+    // projectM scans each path recursively, so a directory below another listed one would be scanned twice
+    QList<QByteArray> paths;
+    for (const QString & dir : found) {
+        bool nested = false;
+        for (const QString & other : found)
+            nested = nested || dir.startsWith(other + '/');
+        if (!nested)
+            paths << dir.toLocal8Bit();
+    }
+
+    std::vector<const char *> rawPaths;
+    for (const QByteArray & path : paths)
+        rawPaths.push_back(path.constData());
+    projectm_set_texture_search_paths(m_projectM, rawPaths.data(), rawPaths.size());
 }
 
 bool QPlaylistModel::readPlaylist(const QString & file)
@@ -306,6 +383,8 @@ bool QPlaylistModel::loadPresetsFromDirectory(const QString & path)
     // One recursive scan of a cleared playlist cannot produce duplicates; the library's check is quadratic
     projectm_playlist_add_path(m_playlist, path.toLocal8Bit().data(), true, true);
     endResetModel();
+
+    setTexturePaths({path});
 
     uint32_t size = projectm_playlist_size(m_playlist);
     if (size > 0) {

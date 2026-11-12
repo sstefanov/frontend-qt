@@ -28,6 +28,8 @@
 #include <QStringList>
 #include <QtDebug>
 
+#include "qpresetpreloader.hpp"
+
 class QXmlStreamReader;
 class QDragMoveEvent;
 struct projectm;
@@ -89,6 +91,10 @@ inline const QString & activePresetUrl() const {
 	return m_activePresetUrl;
 }
 
+// Chooses the preset that follows the current one and starts preparing it in the background
+void planNext();
+void playNext(bool hardCut);
+
 void notifyDataChanged(unsigned int index);
 
 inline QStringList mimeTypes () const  {
@@ -106,10 +112,14 @@ public slots:
 	
 	 private:
 	void readPlaylistItem(QXmlStreamReader & reader);
+	void setTexturePaths(const QStringList & presetDirs);
 	static void presetSwitched(bool isHardCut, unsigned int index, void * userData);
+	static void switchRequested(bool isHardCut, void * userData);
 	static QString PRESET_MIME_TYPE;
 	projectm* m_projectM;
 	projectm_playlist* m_playlist;  // projectM 4.x: Separate playlist handle
+	QPresetPreloader m_preloader;
+	uint32_t m_plannedNext = 0;
 	QString m_activePresetUrl;
 	QString m_playlistName;
 	QString m_playlistDesc;

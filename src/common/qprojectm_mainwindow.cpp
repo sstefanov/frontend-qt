@@ -674,9 +674,9 @@ void QProjectM_MainWindow::keyReleaseEvent ( QKeyEvent * e )
 					return;
 			}
 			if (playlistModel && playlistModel->playlistHandle()) {
-				auto* playlist = playlistModel->playlistHandle();
-				qprojectMWidget()->queueGLOperation([playlist]() {
-					projectm_playlist_play_next(playlist, true);
+				QPlaylistModel * model = playlistModel;
+				qprojectMWidget()->queueGLOperation([model]() {
+					model->playNext(true);
 				});
 			}
 			return;
@@ -1188,6 +1188,7 @@ void QProjectM_MainWindow::presetSoftCut() {
 void QProjectM_MainWindow::setShuffleEnabled(int state) {
 	if (playlistModel && playlistModel->playlistHandle()) {
 		projectm_playlist_set_shuffle(playlistModel->playlistHandle(), state == Qt::Checked);
+		playlistModel->planNext();
 	}
 }
 
@@ -1371,6 +1372,8 @@ void QProjectM_MainWindow::updateFilteredPlaylist ( const QString & text )
 	}
 
 	previousFilter = filter;
+	// The row after the playing preset is a different preset now
+	playlistModel->planNext();
 	qprojectMWidget()->releasePresetLock();
 }
 

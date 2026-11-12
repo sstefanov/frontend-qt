@@ -12,6 +12,7 @@ add_library(projectM-Qt-Common STATIC
         qpreseteditordialog.hpp
         qpreseteditordialog.ui
         qpresetfiledialog.hpp
+        qpresetpreloader.hpp
         qpresettextedit.cpp
         qpresettextedit.hpp
         qprojectm.hpp
