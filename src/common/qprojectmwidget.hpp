@@ -39,6 +39,8 @@
 #include <vector>
 #include <queue>
 #include <cstring>
+#include <cmath>
+#include <clocale>
 #include <algorithm>
 
 class QProjectMWidget : public QOpenGLWidget
@@ -59,6 +61,8 @@ class QProjectMWidget : public QOpenGLWidget
 			// cause EGL_BAD_MATCH (error 3009) on NVIDIA Wayland.
 			setAttribute(Qt::WA_OpaquePaintEvent);
 			setAttribute(Qt::WA_NoSystemBackground);
+			// projectM leaves arbitrary alpha in its output, which Wayland compositors show as a see-through window
+			setTextureFormat(GL_RGB8);
 
 			m_mouseTimer = new QTimer ( this );
 
@@ -258,6 +262,7 @@ class QProjectMWidget : public QOpenGLWidget
 		std::vector<float> m_audioBuffer;
 		size_t m_audioWritePos;
 		size_t m_audioReadPos;
+		float m_audioPeak = 0.0f; // slowly decaying input peak, for level normalisation
 		QMutex m_audioBufferMutex;
 
 		// Mutex to protect all projectM API calls
@@ -289,6 +294,8 @@ class QProjectMWidget : public QOpenGLWidget
 		void initializeGL() override
 		{
 		        if (m_projectM == 0) {
+			    // QApplication applies the user's locale; with a decimal comma libprojectM parses every preset value as 0
+			    setlocale(LC_NUMERIC, "C");
 			    this->m_projectM = new QProjectM ( m_config_file );
 			    // Set initial window size (physical pixels) before first render
 			    int pw = static_cast<int>(width() * devicePixelRatio());
@@ -345,6 +352,18 @@ class QProjectMWidget : public QOpenGLWidget
 		                float sample = m_audioBuffer[m_audioReadPos];
 		                tempBuffer[i] = std::max(-1.0f, std::min(1.0f, sample));
 		                m_audioReadPos = (m_audioReadPos + 1) % AUDIO_BUFFER_SIZE;
+		            }
+		            // AGC: presets expect full-scale audio, but an output monitor is tapped after the player's volume control
+		            float peak = 0.0f;
+		            for (size_t i = 0; i < toRead; ++i) {
+		                peak = std::max(peak, std::fabs(tempBuffer[i]));
+		            }
+		            m_audioPeak = std::max(peak, m_audioPeak * 0.999f);
+		            if (m_audioPeak > 1e-4f) {
+		                const float gain = std::max(1.0f, std::min(1.0f / m_audioPeak, 300.0f));
+		                for (size_t i = 0; i < toRead; ++i) {
+		                    tempBuffer[i] *= gain;
+		                }
 		            }
 		            projectm_pcm_add_float(m_projectM->instance(), tempBuffer,
 		                                   static_cast<unsigned int>(toRead / 2), PROJECTM_STEREO);

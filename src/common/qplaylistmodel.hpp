@@ -62,6 +62,8 @@ int columnCount ( const QModelIndex & parent= QModelIndex()) const ;
 bool readPlaylist(const QString & file);
 bool writePlaylist ( const QString & file );
 bool loadPresetsFromDirectory(const QString & path);
+bool loadDefaultPresets(const QString & systemPresetDir);
+static QString userPresetPath();
 Qt::ItemFlags flags(const QModelIndex &index) const;
 
 
@@ -83,6 +85,10 @@ inline projectm_playlist* playlistHandle() const {
 	return m_playlist;
 }
 
+inline const QString & activePresetUrl() const {
+	return m_activePresetUrl;
+}
+
 void notifyDataChanged(unsigned int index);
 
 inline QStringList mimeTypes () const  {
@@ -100,9 +106,11 @@ public slots:
 	
 	 private:
 	void readPlaylistItem(QXmlStreamReader & reader);
+	static void presetSwitched(bool isHardCut, unsigned int index, void * userData);
 	static QString PRESET_MIME_TYPE;
 	projectm* m_projectM;
 	projectm_playlist* m_playlist;  // projectM 4.x: Separate playlist handle
+	QString m_activePresetUrl;
 	QString m_playlistName;
 	QString m_playlistDesc;
 };

@@ -27,6 +27,7 @@
 #include <QtDebug>
 #include <QFileInfo>
 #include <QDir>
+#include <QRandomGenerator>
 #include <QMessageBox>
 
 #include "qplaylistmodel.hpp"
@@ -41,6 +42,19 @@ QPlaylistModel::QPlaylistModel(projectm* _projectM, QObject * parent)
     m_playlist = projectm_playlist_create(m_projectM);
     if (!m_playlist) {
         qWarning() << "Failed to create playlist manager";
+    } else {
+        projectm_playlist_set_preset_switched_event_callback(m_playlist, &QPlaylistModel::presetSwitched, this);
+    }
+}
+
+void QPlaylistModel::presetSwitched(bool isHardCut, unsigned int index, void * userData)
+{
+    Q_UNUSED(isHardCut);
+    QPlaylistModel * model = static_cast<QPlaylistModel *>(userData);
+    char * filename = projectm_playlist_item(model->m_playlist, index);
+    if (filename) {
+        model->m_activePresetUrl = QString(filename);
+        projectm_playlist_free_string(filename);
     }
 }
 
@@ -217,9 +231,47 @@ void QPlaylistModel::clear()
     m_playlistDesc.clear();
 }
 
+QString QPlaylistModel::userPresetPath()
+{
+    return QDir::homePath() + "/.local/share/projectM/presets";
+}
+
+bool QPlaylistModel::loadDefaultPresets(const QString & systemPresetDir)
+{
+    QStringList dirs, canonicalDirs;
+    for (const QString & dir : {systemPresetDir, userPresetPath()}) {
+        // Empty if the directory does not exist; also skips a user dir that links to the system one
+        const QString canonical = QFileInfo(dir).canonicalFilePath();
+        if (canonical.isEmpty() || !QFileInfo(canonical).isDir() || canonicalDirs.contains(canonical))
+            continue;
+        dirs << dir;
+        canonicalDirs << canonical;
+    }
+
+    beginResetModel();
+    projectm_playlist_clear(m_playlist);
+    for (int i = 0; i < dirs.size(); ++i) {
+        // A directory inside another one is already covered by the recursive scan
+        bool nested = false;
+        for (const QString & other : canonicalDirs)
+            nested = nested || canonicalDirs[i].startsWith(other + '/');
+        // The library's own duplicate check is quadratic: ~30 s for 140k presets
+        if (!nested)
+            projectm_playlist_add_path(m_playlist, dirs[i].toLocal8Bit().data(), true, true);
+    }
+    endResetModel();
+
+    uint32_t size = projectm_playlist_size(m_playlist);
+    if (size > 0) {
+        projectm_playlist_set_position(m_playlist, QRandomGenerator::global()->bounded(size), true);
+    }
+
+    return size > 0;
+}
+
 bool QPlaylistModel::readPlaylist(const QString & file)
 {
-    QString defaultPresetPath = QDir::homePath() + "/.local/share/projectM/presets";
+    QString defaultPresetPath = userPresetPath();
 
     // Determine the directory to load presets from
     QString presetDir;
@@ -251,7 +303,8 @@ bool QPlaylistModel::loadPresetsFromDirectory(const QString & path)
 {
     beginResetModel();
     projectm_playlist_clear(m_playlist);
-    projectm_playlist_add_path(m_playlist, path.toLocal8Bit().data(), true, false);
+    // One recursive scan of a cleared playlist cannot produce duplicates; the library's check is quadratic
+    projectm_playlist_add_path(m_playlist, path.toLocal8Bit().data(), true, true);
     endResetModel();
 
     uint32_t size = projectm_playlist_size(m_playlist);

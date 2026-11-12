@@ -102,6 +102,9 @@ m_QPlaylistFileDialog( new QPlaylistFileDialog ( this ))
 	connect ( ui->clearPresetList_PushButton, SIGNAL ( pressed() ),
 	          this, SLOT ( clearPlaylist() ) );
 
+	connect ( ui->sortPresetsPushButton, SIGNAL ( clicked() ),
+	          this, SLOT ( sortPlaylist() ) );
+
 	connect(ui->tableView, SIGNAL(resized(QResizeEvent *)), this, SLOT(refreshHeaders(QResizeEvent*)));
 
 	connect(ui->tableView, SIGNAL(mousePressed(QMouseEvent*, const QModelIndexList &)), this,
@@ -311,17 +314,24 @@ void QProjectM_MainWindow::postProjectM_Initialize()
 
 	//if (firstOfRefreshPlaylist) {
 	//if (firstOfRefreshPlaylist) {
-		QString playlistFile;
-		if ((playlistFile = qSettings.value("PlaylistFile", QString()).toString()) == QString())
+		// Last used preset directory; saved on exit
+		url = qSettings.value("PlaylistFile", QString()).toString();
+		if (url.isEmpty())
         {
-			// projectM 4.x: Settings API removed, just use empty URL
-			url = QString();
+			// System presets: same "Preset Path" setting projectMSDL reads from config.inp
+			try {
+				ConfigFile config(m_QProjectMWidget->configFile().toStdString());
+				url = QString::fromStdString(config.read<std::string>("Preset Path", ""));
+			} catch (ConfigFile::file_not_found&) {
+				url = QString();
+			}
         }
-		else
-			url = playlistFile;
 
-		if (!playlistModel->readPlaylist(url))
+		// The user's own presets are always loaded in addition
+		if (!playlistModel->loadDefaultPresets(url))
 			url = QString();
+		else if (!QFileInfo(url).isDir())
+			url = QPlaylistModel::userPresetPath();
 
 		updatePlaylistUrl(url);
 
@@ -946,6 +956,8 @@ void QProjectM_MainWindow::openPlaylistDialog()
 
 		QString url = m_QPlaylistFileDialog->selectedFiles() [0];
 
+		// Loading the first preset creates GL objects, which must go into the widget's context
+		qprojectMWidget()->makeCurrent();
 
 		const bool loadedOk = playlistModel->readPlaylist ( url );
 
@@ -1299,29 +1311,12 @@ void QProjectM_MainWindow::updateFilteredPlaylist ( const QString & text )
 
 
 	qprojectMWidget()->seizePresetLock();
+	// Re-selecting the active preset below loads it, which needs the widget's GL context
+	qprojectMWidget()->makeCurrent();
 
 	const QString filter = text.toLower();
-	// projectM 4.x: Use playlist API to get position
-	uint32_t presetIndexBackup = 0;
-	bool presetSelected = false;
-	if (playlistModel && playlistModel->playlistHandle()) {
-		presetIndexBackup = projectm_playlist_get_position(playlistModel->playlistHandle());
-		presetSelected = (playlistModel->rowCount() > 0);
-	}
-	Nullable<unsigned int> activePresetId;
-
-	if (!presetSelected && activePresetIndex->hasValue()) {
-		activePresetId =  activePresetIndex->value();
-	} else if (presetSelected) {
-		const PlaylistItemVector & oldPlaylistItems = *historyHash.value(previousFilter);
-
-		if (presetIndexBackup < static_cast<std::size_t>(oldPlaylistItems.size())) {
-			activePresetId = oldPlaylistItems[presetIndexBackup];
-		}
-
-
-	} else {
-	}
+	// The playing preset is re-selected by file: its row changes with the filter and the sort order
+	const QString activePresetUrl = playlistModel->activePresetUrl();
 
 	playlistModel->clearItems();
 
@@ -1336,7 +1331,7 @@ void QProjectM_MainWindow::updateFilteredPlaylist ( const QString & text )
 			// projectM 4.x: appendRow now takes only URL
 			playlistModel->appendRow ( data.url );
 
-			if (activePresetId.hasValue() && data.id == activePresetId.value()) {
+			if (!presetExistsWithinFilter && data.url == activePresetUrl) {
 				// projectM 4.x: Use playlist API to set position
 				if (playlistModel->playlistHandle()) {
 					projectm_playlist_set_position(playlistModel->playlistHandle(),
@@ -1360,7 +1355,7 @@ void QProjectM_MainWindow::updateFilteredPlaylist ( const QString & text )
 			{
 				// projectM 4.x: appendRow now takes only URL
 				playlistModel->appendRow ( data.url );
-				if (activePresetId.hasValue() && data.id == activePresetId.value()) {
+				if (!presetExistsWithinFilter && data.url == activePresetUrl) {
 					// projectM 4.x: Use playlist API to set position
 					if (playlistModel->playlistHandle()) {
 						projectm_playlist_set_position(playlistModel->playlistHandle(),
@@ -1377,6 +1372,41 @@ void QProjectM_MainWindow::updateFilteredPlaylist ( const QString & text )
 
 	previousFilter = filter;
 	qprojectMWidget()->releasePresetLock();
+}
+
+void QProjectM_MainWindow::sortPlaylist()
+{
+	if (!playlistModel || !historyHash.contains(QString()))
+		return;
+
+	const Qt::SortOrder order = m_nextSortOrder;
+	PlaylistItemVector & all = *historyHash[QString()];
+	std::vector<std::pair<QString, long>> keyed;
+	keyed.reserve(all.size());
+	for (int i = 0; i < all.size(); ++i)
+		keyed.emplace_back(playlistItemMetaDataHash.value(all[i]).name.toLower(), all[i]);
+	std::stable_sort(keyed.begin(), keyed.end(),
+		[order](const std::pair<QString, long> & a, const std::pair<QString, long> & b) {
+			return order == Qt::AscendingOrder ? a.first < b.first : b.first < a.first;
+		});
+	for (int i = 0; i < all.size(); ++i)
+		all[i] = keyed[i].second;
+
+	// Filtered lists were cut from the old order
+	for (auto it = historyHash.begin(); it != historyHash.end();) {
+		if (it.key().isEmpty()) {
+			++it;
+		} else {
+			delete it.value();
+			it = historyHash.erase(it);
+		}
+	}
+
+	// Rebuilds the list in the new order and re-selects the playing preset
+	updateFilteredPlaylist(ui->presetSearchBarLineEdit->text());
+
+	m_nextSortOrder = order == Qt::AscendingOrder ? Qt::DescendingOrder : Qt::AscendingOrder;
+	ui->sortPresetsPushButton->setText(m_nextSortOrder == Qt::AscendingOrder ? tr("Sort A-Z") : tr("Sort Z-A"));
 }
 
 

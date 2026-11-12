@@ -147,6 +147,7 @@ void setShuffleEnabled(int state);
       void changePresetAttribute(const QModelIndex & index);
       void openSettingsDialog();
       void updateFilteredPlaylist(const QString & text);
+      void sortPlaylist();
       void refreshHeaders(QResizeEvent * event = 0);
       void removePlaylistItems(const QModelIndexList & items);
       void dragAndDropPlaylistItems(const QModelIndexList &, const QModelIndex &);
@@ -205,6 +206,7 @@ void setShuffleEnabled(int state);
       QAction *aboutQtAct;
 
       QString previousFilter;	
+      Qt::SortOrder m_nextSortOrder = Qt::AscendingOrder;
       Qt::DockWidgetArea dockWidgetArea;
 
       QPresetFileDialog * m_QPresetFileDialog;

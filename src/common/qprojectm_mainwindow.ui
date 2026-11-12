@@ -179,13 +179,19 @@ p, li { white-space: pre-wrap; }
        </property>
       </widget>
      </item>
-     <item row="0" column="5">
+     <item row="1" column="0" colspan="5">
       <widget class="QLineEdit" name="presetSearchBarLineEdit">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
          <horstretch>30</horstretch>
          <verstretch>0</verstretch>
         </sizepolicy>
+       </property>
+       <property name="placeholderText">
+        <string>Search presets...</string>
+       </property>
+       <property name="clearButtonEnabled">
+        <bool>true</bool>
        </property>
        <property name="statusTip">
         <string>Start typing in a filter to crop the play list.</string>
@@ -198,7 +204,17 @@ p, li { white-space: pre-wrap; }
        </property>
       </widget>
      </item>
-     <item row="1" column="0" colspan="6">
+     <item row="1" column="5">
+      <widget class="QPushButton" name="sortPresetsPushButton">
+       <property name="toolTip">
+        <string>Sort the whole playlist by preset name. Click again to reverse the order.</string>
+       </property>
+       <property name="text">
+        <string>Sort A-Z</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0" colspan="6">
       <widget class="QPlaylistTableView" name="tableView">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
@@ -268,7 +284,7 @@ p, li { white-space: pre-wrap; }
        </property>
       </widget>
      </item>
-     <item row="2" column="0">
+     <item row="3" column="0">
       <widget class="QCheckBox" name="shuffleEnabledCheckBox">
        <property name="enabled">
         <bool>true</bool>
@@ -314,7 +330,7 @@ image: url(:/images/icons/hi16-action-projectm_random_no.png);
        </property>
       </widget>
      </item>
-     <item row="2" column="1" colspan="5">
+     <item row="3" column="1" colspan="5">
       <widget class="QCheckBox" name="lockPresetCheckBox">
        <property name="enabled">
         <bool>true</bool>
