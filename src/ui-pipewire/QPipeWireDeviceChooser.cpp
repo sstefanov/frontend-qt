@@ -55,17 +55,8 @@ void QPipeWireDeviceChooser::updateDevicesListViewLock(int state)
 {
     devicesListView->setEnabled(state != Qt::Checked);
 
-    if (state == Qt::Checked) {
-        if (m_pipeWireThread != nullptr) {
-            // Find and connect to first monitor source
-            const QHash<uint32_t, QString>& sources = QPipeWireThread::sourceList();
-            for (auto it = sources.begin(); it != sources.end(); ++it) {
-                if (it.value().contains("[Monitor]")) {
-                    m_pipeWireThread->connectDeviceById(it.key());
-                    break;
-                }
-            }
-        }
+    if (m_pipeWireThread != nullptr) {
+        m_pipeWireThread->setFollowPlayback(state == Qt::Checked);
     }
 }
 

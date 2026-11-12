@@ -50,10 +50,10 @@ p, li { white-space: pre-wrap; }
       <item>
        <widget class="QCheckBox" name="tryFirstAvailableMonitorCheckBox" >
         <property name="toolTip" >
-         <string>This will try to find any available monitor source on startup as the PipeWire audio source. Monitor sources capture system audio output. This is the recommended way to get projectM to visualize sound without specifying a device explicitly.</string>
+         <string>Visualizes the output device that audio is currently playing on, or the default output if nothing is playing. Recommended unless you want to pick a device yourself.</string>
         </property>
         <property name="text" >
-         <string>Try first available monitor</string>
+         <string>Follow the output that is playing</string>
         </property>
        </widget>
       </item>

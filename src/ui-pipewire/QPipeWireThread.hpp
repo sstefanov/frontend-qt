@@ -35,6 +35,7 @@
 #include "qprojectm_mainwindow.hpp"
 #include <QHash>
 #include <QModelIndex>
+#include <atomic>
 
 class QPipeWireThread : public QThread
 {
@@ -59,6 +60,7 @@ public slots:
     void cleanup();
     void connectDevice(const QModelIndex& index);
     void connectDeviceById(uint32_t nodeId);
+    void setFollowPlayback(bool enabled);
 
 signals:
     void threadCleanedUp();
@@ -90,6 +92,7 @@ private:
 
     void enumerateDevices();
     void reconnect(uint32_t nodeId);
+    static uint32_t busiestSink();
 
     // Thread-safe helper: schedule reconnect on PipeWire loop thread
     static int reconnect_callback(struct spa_loop *loop, bool async, uint32_t seq,
@@ -106,6 +109,8 @@ private:
     // Device storage
     static QHash<uint32_t, QString> s_sourceList;  // node_id -> display_name
     static QHash<uint32_t, bool> s_isSinkMap;      // node_id -> is_sink (true for monitors)
+    static QHash<uint32_t, uint32_t> s_playbackLinks; // link_id -> node the link plays into
+    static std::atomic<bool> s_followPlayback;
     static QString s_currentDeviceName;
     static uint32_t s_currentNodeId;
 };

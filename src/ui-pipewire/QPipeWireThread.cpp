@@ -29,6 +29,8 @@ QPipeWireThread::AudioData QPipeWireThread::s_data = {};
 struct pw_context *QPipeWireThread::s_context = nullptr;
 QHash<uint32_t, QString> QPipeWireThread::s_sourceList;
 QHash<uint32_t, bool> QPipeWireThread::s_isSinkMap;
+QHash<uint32_t, uint32_t> QPipeWireThread::s_playbackLinks;
+std::atomic<bool> QPipeWireThread::s_followPlayback{false};
 QString QPipeWireThread::s_currentDeviceName;
 uint32_t QPipeWireThread::s_currentNodeId = PW_ID_ANY;
 
@@ -102,9 +104,21 @@ void QPipeWireThread::on_registry_global(void *data, uint32_t id,
 {
     Q_UNUSED(permissions);
     Q_UNUSED(version);
-    Q_UNUSED(data);
 
     if (!props) {
+        return;
+    }
+
+    if (strcmp(type, PW_TYPE_INTERFACE_Link) == 0) {
+        const char *inputNode = spa_dict_lookup(props, PW_KEY_LINK_INPUT_NODE);
+        if (inputNode) {
+            s_playbackLinks.insert(id, QByteArray(inputNode).toUInt());
+            // Something started playing: move there unless the monitored output is still in use
+            const uint32_t sink = busiestSink();
+            if (s_followPlayback && sink != PW_ID_ANY && sink != s_currentNodeId) {
+                static_cast<QPipeWireThread *>(data)->reconnect(sink);
+            }
+        }
         return;
     }
 
@@ -148,11 +162,36 @@ void QPipeWireThread::on_registry_global_remove(void *data, uint32_t id)
     Q_UNUSED(data);
     s_sourceList.remove(id);
     s_isSinkMap.remove(id);
+    s_playbackLinks.remove(id);
 
     if (s_currentNodeId == id) {
         s_currentNodeId = PW_ID_ANY;
         s_currentDeviceName.clear();
     }
+}
+
+// The output most streams are playing into; sticks with the monitored one while it is in use
+uint32_t QPipeWireThread::busiestSink()
+{
+    QHash<uint32_t, int> linkCount;
+    const QHash<uint32_t, uint32_t> &links = s_playbackLinks;
+    for (uint32_t node : links) {
+        if (s_isSinkMap.value(node, false)) {
+            ++linkCount[node];
+        }
+    }
+
+    if (linkCount.contains(s_currentNodeId)) {
+        return s_currentNodeId;
+    }
+
+    uint32_t best = PW_ID_ANY;
+    for (auto it = linkCount.cbegin(); it != linkCount.cend(); ++it) {
+        if (best == PW_ID_ANY || it.value() > linkCount.value(best)) {
+            best = it.key();
+        }
+    }
+    return best;
 }
 
 void QPipeWireThread::enumerateDevices()
@@ -174,13 +213,14 @@ void QPipeWireThread::enumerateDevices()
 
     // Add listener
     pw_registry_add_listener(s_data.registry, &s_data.registry_listener,
-                            &registry_events, nullptr);
+                            &registry_events, this);
 }
 
 void QPipeWireThread::reconnect(uint32_t nodeId)
 {
     // Check if this node is a sink (needs monitoring)
-    bool is_sink = s_isSinkMap.value(nodeId, false);
+    // PW_ID_ANY lets the session manager pick the default output
+    bool is_sink = nodeId == PW_ID_ANY || s_isSinkMap.value(nodeId, false);
 
     // Disconnect current stream if active
     if (s_data.stream) {
@@ -267,8 +307,19 @@ int QPipeWireThread::reconnect_callback(struct spa_loop *loop, bool async, uint3
     QPipeWireThread *self = static_cast<QPipeWireThread *>(user_data);
     uint32_t nodeId;
     memcpy(&nodeId, data, sizeof(nodeId));
+    if (nodeId == PW_ID_ANY) {
+        nodeId = busiestSink();
+    }
     self->reconnect(nodeId);
     return 0;
+}
+
+void QPipeWireThread::setFollowPlayback(bool enabled)
+{
+    s_followPlayback = enabled;
+    if (enabled) {
+        connectDeviceById(PW_ID_ANY);
+    }
 }
 
 void QPipeWireThread::connectDevice(const QModelIndex& index)
@@ -304,14 +355,11 @@ void QPipeWireThread::readSettings()
     // Give time for device enumeration to complete
     QThread::msleep(100);
 
+    s_followPlayback = tryFirstMonitor;
     if (tryFirstMonitor) {
-        // Find first monitor source (system audio)
-        for (auto it = s_sourceList.begin(); it != s_sourceList.end(); ++it) {
-            if (it.value().contains("[Monitor]")) {
-                reconnect(it.key());
-                return;
-            }
-        }
+        // The output something is playing into, or the default output if all are idle
+        reconnect(busiestSink());
+        return;
     } else if (preferredNodeId != 0 && s_sourceList.contains(preferredNodeId)) {
         reconnect(preferredNodeId);
         return;
@@ -399,9 +447,12 @@ void QPipeWireThread::run()
 
     // Give some time for device enumeration to complete
     // Process events for a bit to populate the device list
+    // Iterating without enter/leave leaves the loop locked, which deadlocks cleanup() on exit
+    pw_loop_enter(pw_main_loop_get_loop(s_data.loop));
     for (int i = 0; i < 10; ++i) {
         pw_loop_iterate(pw_main_loop_get_loop(s_data.loop), 10);
     }
+    pw_loop_leave(pw_main_loop_get_loop(s_data.loop));
 
     // Read settings and connect to appropriate device
     readSettings();
