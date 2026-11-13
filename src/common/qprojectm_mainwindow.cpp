@@ -113,6 +113,9 @@ m_QPlaylistFileDialog( new QPlaylistFileDialog ( this ))
 	connect ( m_QProjectMWidget, SIGNAL ( projectM_Initialized(QProjectM*) ),
 		  this, SLOT ( postProjectM_Initialize() ) );
 
+	connect ( m_QProjectMWidget, SIGNAL ( trackStarted() ),
+		  this, SLOT ( playNextForNewTrack() ) );
+
     m_QProjectMWidget->makeCurrent();
 	m_QProjectMWidget->setFocus();
 	setCentralWidget ( m_QProjectMWidget );
@@ -305,6 +308,7 @@ void QProjectM_MainWindow::postProjectM_Initialize()
 	QSettings qSettings("projectM", "qprojectM");
 
 	playlistModel = new QPlaylistModel ( qprojectM()->instance(), this );
+	playlistModel->setMusicLivelinessSource([this]() { return m_QProjectMWidget->musicLiveliness(); });
 	ui->tableView->setModel ( playlistModel );
 
 	/// @bug only do this at startup? fix me
@@ -1375,6 +1379,17 @@ void QProjectM_MainWindow::updateFilteredPlaylist ( const QString & text )
 	// The row after the playing preset is a different preset now
 	playlistModel->planNext();
 	qprojectMWidget()->releasePresetLock();
+}
+
+void QProjectM_MainWindow::playNextForNewTrack()
+{
+	if (!playlistModel || !playlistModel->playlistHandle() || ui->lockPresetCheckBox->isChecked())
+		return;
+
+	QPlaylistModel * model = playlistModel;
+	qprojectMWidget()->queueGLOperation([model]() {
+		model->playNext(true);
+	});
 }
 
 void QProjectM_MainWindow::sortPlaylist()

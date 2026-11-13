@@ -31,6 +31,7 @@
 #include <QSet>
 #include <QRandomGenerator>
 #include <QMessageBox>
+#include <algorithm>
 #include <vector>
 
 #include "qplaylistmodel.hpp"
@@ -76,28 +77,71 @@ void QPlaylistModel::planNext()
         return;
 
     const uint32_t current = projectm_playlist_get_position(m_playlist);
+    QVector<uint32_t> indices;
     if (projectm_playlist_get_shuffle(m_playlist) && size > 1) {
-        // The library draws its random preset only when switching, too late to prepare it
-        do {
-            m_plannedNext = QRandomGenerator::global()->bounded(size);
-        } while (m_plannedNext == current);
+        // The library draws its random preset only when switching, too late to prepare it.
+        // Several candidates are prepared, so the one that suits the music can be picked when switching.
+        uint32_t wanted = SHUFFLE_CANDIDATES;
+        if (wanted > size - 1)
+            wanted = size - 1;
+        while (static_cast<uint32_t>(indices.size()) < wanted) {
+            const uint32_t index = QRandomGenerator::global()->bounded(size);
+            if (index != current && !indices.contains(index))
+                indices << index;
+        }
     } else {
-        m_plannedNext = (current + 1) % size;
+        indices << (current + 1) % size;
     }
 
-    char * filename = projectm_playlist_item(m_playlist, m_plannedNext);
-    if (filename) {
-        m_preloader.preload(filename);
-        projectm_playlist_free_string(filename);
+    m_candidates.clear();
+    QList<QByteArray> files;
+    for (uint32_t index : indices) {
+        char * filename = projectm_playlist_item(m_playlist, index);
+        if (filename) {
+            m_candidates.append({index, QByteArray(filename)});
+            files << QByteArray(filename);
+            projectm_playlist_free_string(filename);
+        }
     }
+    m_preloader.prepare(files);
 }
 
 void QPlaylistModel::playNext(bool hardCut)
 {
-    if (projectm_playlist_get_shuffle(m_playlist) && m_plannedNext < projectm_playlist_size(m_playlist))
-        projectm_playlist_set_position(m_playlist, m_plannedNext, hardCut);
-    else
+    if (!projectm_playlist_get_shuffle(m_playlist)) {
         projectm_playlist_play_next(m_playlist, hardCut);
+        return;
+    }
+
+    // Prepared candidates that are still at the same place in the list, calmest first
+    QVector<QPair<float, uint32_t>> choices;
+    const QList<QPresetPreloader::Prepared> prepared = m_preloader.ready();
+    for (const QPresetPreloader::Prepared & preset : prepared) {
+        for (const Candidate & candidate : m_candidates) {
+            if (candidate.file != preset.file)
+                continue;
+            char * filename = projectm_playlist_item(m_playlist, candidate.index);
+            if (!filename)
+                continue;
+            if (candidate.file == filename)
+                choices.append({preset.motion, candidate.index});
+            projectm_playlist_free_string(filename);
+        }
+    }
+
+    if (choices.isEmpty()) {
+        // Nothing is prepared yet, e.g. when switching again right away
+        projectm_playlist_play_next(m_playlist, hardCut);
+        return;
+    }
+
+    std::sort(choices.begin(), choices.end());
+    // A picture that does not move at all with a beat playing is black or frozen
+    while (choices.size() > 1 && choices.first().first < 0.0005f)
+        choices.removeFirst();
+    const float liveliness = m_musicLiveliness ? qBound(0.0f, m_musicLiveliness(), 1.0f) : 0.5f;
+    const int choice = qRound(liveliness * (choices.size() - 1));
+    projectm_playlist_set_position(m_playlist, choices[choice].second, hardCut);
 }
 
 QPlaylistModel::~QPlaylistModel()

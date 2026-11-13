@@ -148,6 +148,7 @@ void setShuffleEnabled(int state);
       void openSettingsDialog();
       void updateFilteredPlaylist(const QString & text);
       void sortPlaylist();
+      void playNextForNewTrack();
       void refreshHeaders(QResizeEvent * event = 0);
       void removePlaylistItems(const QModelIndexList & items);
       void dragAndDropPlaylistItems(const QModelIndexList &, const QModelIndex &);

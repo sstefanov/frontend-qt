@@ -28,6 +28,8 @@
 #include <QStringList>
 #include <QtDebug>
 
+#include <functional>
+
 #include "qpresetpreloader.hpp"
 
 class QXmlStreamReader;
@@ -95,6 +97,11 @@ inline const QString & activePresetUrl() const {
 void planNext();
 void playNext(bool hardCut);
 
+// Returns 0 (calm) to 1 (lively); used to pick a matching preset in shuffle mode
+inline void setMusicLivelinessSource(std::function<float()> source) {
+	m_musicLiveliness = std::move(source);
+}
+
 void notifyDataChanged(unsigned int index);
 
 inline QStringList mimeTypes () const  {
@@ -119,7 +126,13 @@ public slots:
 	projectm* m_projectM;
 	projectm_playlist* m_playlist;  // projectM 4.x: Separate playlist handle
 	QPresetPreloader m_preloader;
-	uint32_t m_plannedNext = 0;
+	static constexpr uint32_t SHUFFLE_CANDIDATES = 4;
+	struct Candidate {
+		uint32_t index;
+		QByteArray file;
+	};
+	QVector<Candidate> m_candidates;
+	std::function<float()> m_musicLiveliness;
 	QString m_activePresetUrl;
 	QString m_playlistName;
 	QString m_playlistDesc;

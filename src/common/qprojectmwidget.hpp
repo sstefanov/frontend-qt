@@ -159,6 +159,11 @@ class QProjectMWidget : public QOpenGLWidget
 			return m_overlayEnabled;
 		}
 
+		// 0 (steady, calm sound) to 1 (strong, frequent loudness jumps), over the last several seconds
+		float musicLiveliness() const {
+			return m_liveliness;
+		}
+
 	protected slots:
 		inline void mouseMoveEvent ( QMouseEvent * event )
 		{
@@ -231,6 +236,8 @@ class QProjectMWidget : public QOpenGLWidget
 		void projectM_Initialized ( QProjectM * );
 		void projectM_BeforeDestroy();
 		void presetLockChanged ( bool isLocked );
+		// Sound came back after a pause longer than TRACK_GAP_MS
+		void trackStarted();
 
 	private slots:
 		void hideMouse()
@@ -263,6 +270,43 @@ class QProjectMWidget : public QOpenGLWidget
 		size_t m_audioWritePos;
 		size_t m_audioReadPos;
 		float m_audioPeak = 0.0f; // slowly decaying input peak, for level normalisation
+		static constexpr qint64 TRACK_GAP_MS = 2500;
+		QElapsedTimer m_lastSound; // time since the last audible audio, to detect the gap between tracks
+		float m_lastLevel = 0.0f;
+		float m_levelMean = 0.0f;
+		float m_levelFlux = 0.0f;
+		float m_liveliness = 0.5f;
+		int m_levelChunks = 0;
+
+		void updateLiveliness(const float * samples, size_t count)
+		{
+			float energy = 0.0f;
+			for (size_t i = 0; i < count; ++i) {
+				energy += samples[i] * samples[i];
+			}
+			const float level = count ? std::sqrt(energy / count) : 0.0f;
+			if (m_levelChunks++ == 0) {
+				// No earlier chunk to compare with; the jump from zero would count as a huge change
+				m_lastLevel = level;
+				return;
+			}
+			// Averages over roughly five seconds of audio chunks
+			const float rate = 0.004f;
+			m_levelMean += (level - m_levelMean) * rate;
+			m_levelFlux += (std::fabs(level - m_lastLevel) - m_levelFlux) * rate;
+			m_lastLevel = level;
+
+			// The scale follows the music heard so far: it widens within seconds and narrows over several minutes
+			const float raw = m_levelFlux / (m_levelMean + 1e-6f);
+			if (m_levelChunks > 250) {
+				m_calmest += (raw - m_calmest) * (raw < m_calmest ? 0.002f : 0.00005f);
+				m_liveliest += (raw - m_liveliest) * (raw > m_liveliest ? 0.002f : 0.00005f);
+			}
+			const float span = std::max(m_liveliest - m_calmest, 0.08f);
+			m_liveliness = std::max(0.0f, std::min(0.5f + (raw - 0.5f * (m_calmest + m_liveliest)) / span, 1.0f));
+		}
+		float m_calmest = 0.03f;
+		float m_liveliest = 0.28f;
 		QMutex m_audioBufferMutex;
 
 		// Mutex to protect all projectM API calls
@@ -340,6 +384,7 @@ class QProjectMWidget : public QOpenGLWidget
 		    }
 
 		    // Process buffered audio in render thread
+		    bool newTrack = false;
 		    {
 		        QMutexLocker locker(&m_audioBufferMutex);
 		        if (m_audioReadPos != m_audioWritePos) {
@@ -358,6 +403,12 @@ class QProjectMWidget : public QOpenGLWidget
 		            for (size_t i = 0; i < toRead; ++i) {
 		                peak = std::max(peak, std::fabs(tempBuffer[i]));
 		            }
+		            // A paused player delivers either no samples at all or (near) digital silence
+		            const bool audible = peak > std::max(1e-4f, 0.01f * m_audioPeak);
+		            if (audible) {
+		                newTrack = m_lastSound.isValid() && m_lastSound.elapsed() > TRACK_GAP_MS;
+		                m_lastSound.start();
+		            }
 		            m_audioPeak = std::max(peak, m_audioPeak * 0.999f);
 		            if (m_audioPeak > 1e-4f) {
 		                const float gain = std::max(1.0f, std::min(1.0f / m_audioPeak, 300.0f));
@@ -365,9 +416,15 @@ class QProjectMWidget : public QOpenGLWidget
 		                    tempBuffer[i] *= gain;
 		                }
 		            }
+		            if (audible) {
+		                updateLiveliness(tempBuffer, toRead);
+		            }
 		            projectm_pcm_add_float(m_projectM->instance(), tempBuffer,
 		                                   static_cast<unsigned int>(toRead / 2), PROJECTM_STEREO);
 		        }
+		    }
+		    if (newTrack) {
+		        emit trackStarted();
 		    }
 
 		    // Determine if we need the overlay this frame
